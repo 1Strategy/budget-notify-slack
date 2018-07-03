@@ -1,0 +1,107 @@
+#
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template is designed to create budget notifications using the Billing
+  and SNS services.
+Parameters:
+  myBudgetName:
+    Default: your-budget-name
+    Description: The name of your budget that will be listed in the Budgets section
+      of your billing.
+    Type: String
+  budgetedAmount:
+    Default: '15000'
+    Description: The dollar amount you would like to set as your maximum spend.
+    Type: Number
+  slackWebhookURL:
+    Description: The unique path to your Slack webhook. This should be everything
+      after the services/ path.
+    Default: T0E98MF6X/BB400P9ZA7/2lFeI4zPB879ijkSu4RM9vzs
+    Type: String
+  slackChannel:
+    Description: The name of the Slack Channel you would like your notifications to
+      arrive in. Don't include the hash.
+    Default: billing-notifications
+    Type: String
+  s3BucketName:
+    Description: This should be the bucket that is holding your snsToSlack .zip file,
+      and should reside in the same region as your lambda function.
+    Default: your-bucket-name
+    Type: String
+  s3Key:
+    Description: This should be the .zip file name for the snsToSlack code residing
+      in your s3 Bucket.
+    Default: snsToSlack.zip
+    Type: String
+Resources:
+  MyLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: snsToSlack
+      Handler: snsToSlack.handler
+      Role: [arn for s3 execution role]
+      Code:
+        S3Bucket: !Ref 's3BucketName'
+        S3Key: !Ref 's3Key'
+      Environment:
+        Variables:
+          SLACK_CHANNEL: !Ref 'slackChannel'
+          SLACK_WEB_HOOK: !Ref 'slackWebhookURL'
+      Runtime: nodejs6.10
+  BudgetSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Join
+        - _
+        - - !Ref 'myBudgetName'
+          - SNSTopic
+      Subscription:
+        - Endpoint: !GetAtt 'MyLambdaFunction.Arn'
+          Protocol: lambda
+      TopicName: !Join
+        - _
+        - - !Ref 'myBudgetName'
+          - SNSTopic
+  BudgetSNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2008-10-17'
+        Id: __default_policy_ID
+        Statement:
+          - Sid: __default_statement_ID
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: SNS:Publish
+            Resource: !Ref 'BudgetSNSTopic'
+      Topics:
+        - !Ref 'BudgetSNSTopic'
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref 'BudgetSNSTopic'
+      FunctionName: !GetAtt 'MyLambdaFunction.Arn'
+  MyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Ref 'myBudgetName'
+        BudgetLimit:
+          Amount: !Ref 'budgetedAmount'
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostFilters:
+          Service:
+            - Amazon Elastic Compute Cloud - Compute
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 90
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref 'BudgetSNSTopic'
